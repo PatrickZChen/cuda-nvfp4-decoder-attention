@@ -1,0 +1,91 @@
+# Build trees and CMake-generated files
+/build/
+/build-*/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+compile_commands.json
+build.ninja
+rules.ninja
+.ninja_deps
+.ninja_log
+Testing/
+_CPack_Packages/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+
+# Compiled objects, libraries, and generated executables
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.cubin
+*.fatbin
+*.ptx
+*.pdb
+
+# Python bytecode, environments, tests, and coverage
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# NVIDIA profiling reports and temporary exports
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.nvvp
+nsight-*.sqlite
+profile-*.sqlite
+/profiling-tmp/
+
+# Temporary benchmark outputs; curated result artifacts remain trackable
+/benchmark-tmp/
+/benchmark-output-tmp/
+*.bench.tmp
+*.benchmark.tmp
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+.secrets/
+credentials*.json
+*.pem
+*.key
+
+# Other temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.log
