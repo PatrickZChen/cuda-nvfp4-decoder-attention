@@ -24,48 +24,49 @@ find_package(CUDAToolkit REQUIRED)
 find_package(Torch REQUIRED)
 
 set(
-    CUDA_RMSNORM_PYTORCH_CUDA_VERSION
+    CUDA_PRIMITIVES_PYTORCH_CUDA_VERSION
     ""
     CACHE STRING
     "CUDA version used to build the installed PyTorch"
 )
 if(
-    CUDA_RMSNORM_PYTORCH_CUDA_VERSION
-    AND NOT CUDA_RMSNORM_PYTORCH_CUDA_VERSION VERSION_EQUAL CUDAToolkit_VERSION
+    CUDA_PRIMITIVES_PYTORCH_CUDA_VERSION
+    AND NOT CUDA_PRIMITIVES_PYTORCH_CUDA_VERSION VERSION_EQUAL CUDAToolkit_VERSION
 )
     message(WARNING
-        "PyTorch was built with CUDA ${CUDA_RMSNORM_PYTORCH_CUDA_VERSION}, "
+        "PyTorch was built with CUDA ${CUDA_PRIMITIVES_PYTORCH_CUDA_VERSION}, "
         "while this extension uses CUDA Toolkit ${CUDAToolkit_VERSION}. "
         "This is a minor-version difference and must be validated on the target GPU."
     )
 endif()
 
 add_library(
-    cuda_rmsnorm
+    cuda_primitives
     SHARED
     src/bindings.cpp
     src/rmsnorm.cu
+    src/rope.cu
 )
 
 target_include_directories(
-    cuda_rmsnorm
+    cuda_primitives
     PRIVATE
         "${PROJECT_SOURCE_DIR}/include"
         ${TORCH_INCLUDE_DIRS}
 )
 
 target_link_libraries(
-    cuda_rmsnorm
+    cuda_primitives
     PRIVATE
         ${TORCH_LIBRARIES}
         CUDA::cudart
 )
 
 separate_arguments(TORCH_CXX_FLAGS_LIST NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
-target_compile_options(cuda_rmsnorm PRIVATE ${TORCH_CXX_FLAGS_LIST})
+target_compile_options(cuda_primitives PRIVATE ${TORCH_CXX_FLAGS_LIST})
 
 set_target_properties(
-    cuda_rmsnorm
+    cuda_primitives
     PROPERTIES
         BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
         CUDA_ARCHITECTURES 89
@@ -75,7 +76,11 @@ set_target_properties(
         PREFIX ""
 )
 
-message(STATUS "CUDA RMSNorm build type: ${CMAKE_BUILD_TYPE}")
-get_target_property(CUDA_RMSNORM_TARGET_ARCHITECTURES cuda_rmsnorm CUDA_ARCHITECTURES)
-message(STATUS "CUDA RMSNorm target architectures: ${CUDA_RMSNORM_TARGET_ARCHITECTURES}")
+message(STATUS "CUDA primitives build type: ${CMAKE_BUILD_TYPE}")
+get_target_property(
+    CUDA_PRIMITIVES_TARGET_ARCHITECTURES
+    cuda_primitives
+    CUDA_ARCHITECTURES
+)
+message(STATUS "CUDA primitives target architectures: ${CUDA_PRIMITIVES_TARGET_ARCHITECTURES}")
 message(STATUS "PyTorch prefix: ${TORCH_INSTALL_PREFIX}")

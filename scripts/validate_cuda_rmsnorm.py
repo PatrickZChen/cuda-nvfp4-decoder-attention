@@ -12,7 +12,7 @@ import torch
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT))
 
-import cuda_rmsnorm  # noqa: E402
+import cuda_primitives  # noqa: E402
 from reference import rms_norm_reference  # noqa: E402
 
 
@@ -59,7 +59,7 @@ def main() -> None:
         x_cuda = x_cpu.cuda()
         weight_cuda = weight_cpu.cuda()
         expected_cuda = rms_norm_reference(x_cuda, weight_cuda, 1.0e-6)
-        actual = cuda_rmsnorm.cuda_rms_norm(
+        actual = cuda_primitives.cuda_rms_norm(
             x_cuda,
             weight_cuda,
             1.0e-6,

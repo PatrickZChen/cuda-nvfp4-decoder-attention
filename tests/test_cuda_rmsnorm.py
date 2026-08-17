@@ -17,9 +17,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 if CUDA_READY:
-    import cuda_rmsnorm
+    import cuda_primitives
 else:
-    cuda_rmsnorm = None  # type: ignore[assignment]
+    cuda_primitives = None  # type: ignore[assignment]
 
 
 # The deterministic RTX 4080 / SM89 matrix was observed to be BF16 bit-exact.
@@ -45,8 +45,8 @@ def _call(
     weight: torch.Tensor,
     eps: float = 1.0e-6,
 ) -> torch.Tensor:
-    assert cuda_rmsnorm is not None
-    return cuda_rmsnorm.cuda_rms_norm(x, weight, eps)
+    assert cuda_primitives is not None
+    return cuda_primitives.cuda_rms_norm(x, weight, eps)
 
 
 def _deterministic_case(
