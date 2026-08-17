@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "milestone": "M4B",
+  "captured_at_utc": "2026-08-17T21:42:49+00:00",
+  "baseline_commit": "ee6f7efeae04cd504dd879ac4d147b09e600778a",
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 4080 Laptop GPU",
+    "compute_capability": [8, 9],
+    "multiprocessor_count": 58,
+    "max_threads_per_multiprocessor": 1536,
+    "registers_per_multiprocessor": 65536,
+    "l2_cache_bytes": 50331648
+  },
+  "nsight_compute": {
+    "version": "2024.2.1.0 (build 34372528)",
+    "requested_sections": [
+      "SpeedOfLight",
+      "LaunchStats",
+      "Occupancy",
+      "MemoryWorkloadAnalysis",
+      "ComputeWorkloadAnalysis",
+      "InstructionStats",
+      "WarpStateStats",
+      "SchedulerStats",
+      "SourceCounters"
+    ],
+    "verified_locally_available": true,
+    "kernel_filter": "regex:.*w4a16_linear_kernel.*",
+    "matching_warmup_launches_skipped": 3,
+    "matching_launches_requested_per_case": 1,
+    "clock_control": "none",
+    "cache_control": "none",
+    "planned_cases": [
+      {"name": "canonical_q", "m": 1, "n": 3072, "k": 3072},
+      {"name": "canonical_kv", "m": 1, "n": 768, "k": 3072},
+      {"name": "q_m8", "m": 8, "n": 3072, "k": 3072}
+    ],
+    "collection_status": "blocked_before_counter_collection",
+    "driver_error": "ERR_NVGPUCTRPERM: user cannot access NVIDIA GPU Performance Counters",
+    "full_section_attempt": {
+      "case": "canonical_q",
+      "kernel_filter_matched": true,
+      "report_created": false
+    },
+    "launchstats_occupancy_only_retry": {
+      "case": "canonical_q",
+      "requested_sections": ["LaunchStats", "Occupancy"],
+      "kernel_filter_matched": true,
+      "result": "same ERR_NVGPUCTRPERM driver error",
+      "report_created": false
+    },
+    "privilege_fallback": {
+      "command": "sudo -n ncu",
+      "result": "password required",
+      "system_or_driver_settings_changed": false
+    },
+    "counter_metrics_collected": false,
+    "binary_report_created": false
+  },
+  "unavailable_measured_metrics": [
+    "achieved occupancy",
+    "active warps",
+    "compute throughput SOL",
+    "memory throughput SOL",
+    "measured DRAM throughput",
+    "L2 throughput and hit rates",
+    "FP32 and MUFU pipeline utilization",
+    "IPC and issue efficiency",
+    "dynamic instruction counts",
+    "warp stall categories and cycles per instruction"
+  ],
+  "static_binary_evidence": {
+    "extension_sha256": "e5717fb8cbffff98d7223fddf1df6a76ca873fae784389f83565917297714113",
+    "w4a16_source_sha256": "b5043098eb2b5245087683131a41e05f6d7cf1aea5de807ca31624331bc37961",
+    "tool": "CUDA Toolkit 12.5 cuobjdump",
+    "registers_per_thread": 21,
+    "static_shared_memory_bytes_per_block": 32,
+    "dynamic_shared_memory_bytes_per_block": 0,
+    "local_memory_bytes_per_thread": 0,
+    "stack_bytes_per_thread": 0,
+    "block_threads": 256,
+    "static_sass_opcode_occurrences": {
+      "MUFU": 7,
+      "FMUL": 11,
+      "FADD": 15,
+      "FFMA": 0,
+      "LDG": 4,
+      "STG": 1,
+      "LDS": 2,
+      "STS": 2,
+      "SHFL": 11,
+      "IMAD": 92,
+      "IADD3": 28,
+      "LOP3": 10,
+      "PRMT": 1,
+      "BRA": 32,
+      "BAR": 2
+    },
+    "opcode_count_scope": "static occurrences in the full kernel code section, including helper paths and mutually exclusive branches; not dynamic execution counts",
+    "sass_correlations": {
+      "global_gamma_load": "0x0280",
+      "packed_e2m1_load": "0x03a0",
+      "e2m1_decode": "0x03b0-0x0610",
+      "ue4m3_scale_load": "0x0690",
+      "ue4m3_decode": "0x06d0-0x0a10",
+      "ue4m3_mufu_ex2_sites": ["0x0850", "0x0870", "0x0910", "0x0930", "0x0980"],
+      "bf16_activation_load": "0x0aa0",
+      "product_and_private_accumulation": "0x0ac0-0x0b30",
+      "warp_and_block_reductions": "0x0b60-0x0d90",
+      "bf16_output_store": "0x0dc0-0x0e00"
+    },
+    "line_information_available": false,
+    "build": "Release -O3 without -lineinfo; build flags were not changed"
+  },
+  "derived_launch_and_occupancy": {
+    "basis": "frozen source launch geometry, cuobjdump resources, and CUDA device properties; not Nsight measurements",
+    "block_size": [256, 1, 1],
+    "grid_sizes": {
+      "canonical_q": [3072, 1, 1],
+      "canonical_kv": [768, 1, 1],
+      "q_m8": [24576, 1, 1]
+    },
+    "thread_limited_blocks_per_multiprocessor": 6,
+    "theoretical_active_warps_per_multiprocessor": 48,
+    "theoretical_occupancy_percent": 100.0,
+    "registers_do_not_limit_thread_theoretical_occupancy": true,
+    "shared_memory_does_not_limit_thread_theoretical_occupancy": true,
+    "achieved_occupancy": null
+  },
+  "interpretation_rule": "Static and derived fields are not substitutes for unavailable hardware-counter measurements. No DRAM-bandwidth, SOL, achieved-occupancy, or warp-stall claim is made."
+}
