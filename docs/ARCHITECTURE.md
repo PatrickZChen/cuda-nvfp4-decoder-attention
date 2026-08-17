@@ -404,7 +404,7 @@ NVFP4 denotes a planned numerical and packed-weight contract composed of:
 
 - FP4 E2M1 element values;
 - microscaling blocks of 16 contiguous elements;
-- one positive eight-bit floating block scale per microscaling block, described in public material with E4M3/UE4M3 terminology; and
+- one nonnegative eight-bit floating block scale per microscaling block, described in public material with E4M3/UE4M3 terminology; and
 - one FP32 tensor-level decode scale per weight tensor.
 
 This project intentionally chooses the publicly supported 1D weight-scaling variant: each block scale applies to 16 consecutive weight elements along the logical `K` dimension. NVIDIA Transformer Engine may use 2D `16 x 16` scaling for weights by default; its 1D weight scaling is publicly supported when 2D quantization is disabled. The 2D, training-oriented weight recipe is outside this project's initial scope. This choice does not imply that 1D scaling is the only NVFP4 weight-scaling scheme.
@@ -415,7 +415,7 @@ The finite E2M1 magnitude set used by the planned logical reference is:
 0, 0.5, 1, 1.5, 2, 3, 4, 6
 ```
 
-Nonzero magnitudes have corresponding signed values. Round-to-nearest-even is the intended deterministic reference value-selection convention. Exact code points and edge behavior remain subject to the public-source validation items in Section 8.4.
+Nonzero magnitudes have corresponding signed values. Round-to-nearest-even is the intended deterministic reference value-selection convention. Detailed numerical semantics are defined in `docs/NUMERICS.md`.
 
 NVFP4 does not imply that all attention computation is FP4. The initial low-precision focus is the four projection weights and their projection execution. RMSNorm, RoPE, the KV cache, attention scores, softmax, and context retain the BF16/FP32 boundaries defined above.
 
@@ -436,20 +436,20 @@ Blocks never cross rows. Block `(n, b)` contains exactly:
 W[n, 16*b : 16*b + 16]
 ```
 
-There is one logical E2M1 value for each element, one positive logical block scale for each `(n, b)`, and one FP32 global decode scale for the entire matrix. Reconstruction is:
+There is one logical E2M1 value for each element, one nonnegative logical block scale for each `(n, b)`, and one FP32 global decode scale for the entire matrix. Reconstruction is:
 
 ```text
 W_hat[n,k] =
     fp4_value[n,k]
     * block_scale[n, k // 16]
-    * global_scale
+    * global_decode_scale
 ```
 
-The global scale supplies the tensor-wide decode factor. The block scale supplies local dynamic-range adjustment for one row-local 16-element block. The E2M1 value supplies the signed low-precision element value.
+The global decode scale supplies the tensor-wide decode factor. The block scale supplies local dynamic-range adjustment for one row-local 16-element block. The E2M1 value supplies the signed low-precision element value.
 
-Zero tensors must reconstruct exactly and use a deterministic canonical encoding. Tensor-level zero-amax handling must be consistent with validated public NVIDIA semantics. The exact logical zero-block scale value and its encoded byte are deliberately not frozen in Milestone 0; Milestone 2 public-source validation will determine them. This preserves the requirement not to invent undocumented bit-level behavior.
+An all-zero tensor reconstructs exactly to zero. A zero block uses canonical UE4M3 scale byte `0x00`; a nonzero block whose UE4M3 scale candidate underflows to zero also stores `0x00`. For a scale-zero block, the portable repository representation emits canonical E2M1 `+0` payloads and does not divide by the zero scale. This canonical payload policy is a portable repository contract, not a native byte-parity claim.
 
-For nonzero tensors, the scale-selection algorithm and all saturation, underflow, exceptional-value, and tie details must be finalized against authoritative public NVIDIA documentation during Milestone 2. Milestone 0 does not invent those rules.
+The detailed scale-selection, saturation, underflow, exceptional-value, and tie behavior is specified in `docs/NUMERICS.md`.
 
 ### 8.3 Planned portable packed logical layout
 
@@ -458,7 +458,7 @@ For `W [N, K]` with `K % 16 == 0`, the repository layout is planned as:
 ```text
 values:       uint8 [N, K/2]
 scales:       uint8 [N, K/16]
-global_scale: FP32 scalar
+global_decode_scale: FP32 scalar
 ```
 
 For byte-column index `r`, where `0 <= r < K / 2`:
@@ -469,27 +469,16 @@ values[n, r]:
     high nibble = code for W[n, 2*r + 1]
 
 scales[n, b]:
-    byte for the positive scale of W[n, 16*b : 16*b + 16]
+    byte for the nonnegative UE4M3-compatible scale of W[n, 16*b : 16*b + 16]
 ```
 
-Nibble order, row-local block membership, array shapes, and the reconstruction direction are repository contracts. The exact E2M1 code-to-value map and exact scale-byte interpretation are Milestone 2 validation items.
+Nibble order, row-local block membership, array shapes, and the reconstruction direction are repository contracts. The authoritative repository contract for exact E2M1 code mapping, UE4M3 byte semantics, round-to-nearest-even behavior, saturation, global encode/decode scaling, block scaling, zero/underflow behavior, and portable packing distinctions is documented in `docs/NUMERICS.md`.
 
 This is a portable logical layout for the Ada software-decoded implementation. It is not claimed to match a cuBLAS native Blackwell FP4 layout, a CUTLASS Blackwell tiled scale layout, or any other hardware-native FP4 layout. An optional future Blackwell backend may require explicit layout conversion.
 
-### 8.4 Public-source validation required in Milestone 2
+### 8.4 Detailed numerical contract
 
-Before quantization or packing is implemented, Milestone 2 must verify and document from authoritative public NVIDIA sources:
-
-- the exact four-bit E2M1 code-to-value assignments, including zero, signed zero, and any special or reserved encodings;
-- whether E4M3 or UE4M3 is the authoritative term and representation for each positive NVFP4 block scale—the terms are not silently treated as interchangeable here;
-- the scale byte's representable set, exponent bias, exceptional or reserved encodings, and conversion rules;
-- tensor-scale and block-scale selection and rounding;
-- tensor-level zero-amax handling, the canonical zero-block scale value, and its encoded byte;
-- ties, subnormals, overflow, underflow, saturation, NaN, and infinity handling;
-- the interaction between value rounding and scale rounding; and
-- any physical-layout requirements for an optional native Blackwell backend.
-
-The repository's nibble order and row-local block grouping remain deliberate portable-layout choices even if a future native backend needs a different arrangement.
+`docs/NUMERICS.md` is the authoritative detailed numerical source of truth. The repository's nibble order and row-local block grouping remain deliberate portable-layout choices even if a future native backend needs a different arrangement.
 
 ### 8.5 Conceptual execution modes
 
