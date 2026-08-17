@@ -42,6 +42,8 @@ Milestone 1 provides the BF16/FP32 PyTorch correctness reference, Milestone 2B p
 
 Milestone 4B adds a reproducible CUDA-event benchmark and a targeted Nsight Compute workflow for that unchanged direct W4A16 baseline. See [the performance baseline](docs/PERFORMANCE_BASELINE.md) for measurements, profiler availability, restrained bottleneck analysis, and M4C hypotheses; no optimization or speedup claim is made.
 
+Milestone 4C retains a separate grouped-decode experiment that consumes both nibbles of each packed byte and decodes one UE4M3 scale per 16-weight, eight-thread subgroup. Five alternating-order A/B rounds measured median round speedups of 1.2836x for canonical Q/O and 1.1905x for canonical K/V on the target RTX 4080 Laptop GPU; K=128 regressed and remains documented. The frozen `cuda_w4a16_linear` path is unchanged and is not silently routed to the candidate. See [the M4C grouped-decode report](docs/M4C_GROUPED_DECODE.md).
+
 ## CUDA primitives build and validation
 
 The development build assumes Python 3.12 with PyTorch 2.6.0+cu124 and pytest in `.venv`, CMake, CUDA Toolkit 12.5, and an SM89-capable CUDA device. From the repository root:
@@ -55,6 +57,7 @@ python -m pytest -q tests/test_cuda_rmsnorm.py
 python -m pytest -q tests/test_cuda_rope.py
 python -m pytest -q tests/test_cuda_nvfp4.py
 python -m pytest -q tests/test_cuda_w4a16.py
+python -m pytest -q tests/test_cuda_w4a16_grouped.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_rmsnorm.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
@@ -63,11 +66,13 @@ compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_nvfp4.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_w4a16.py
+compute-sanitizer --tool memcheck --error-exitcode 99 \
+    .venv/bin/python scripts/validate_cuda_w4a16_grouped.py
 ```
 
 The script performs a normal out-of-tree `Release` build in `build-cuda` and targets SM89 only. Configuration reports that installed PyTorch was built with CUDA 12.4 while the extension uses Toolkit 12.5; this minor-version difference is retained and validated rather than changing either installation.
 
-The Python loader is `cuda_primitives.py`. It exposes `cuda_rms_norm(x, weight, eps)`, `cuda_apply_rope(x, past_length, rope_theta=10000.0)`, `cuda_unpack_e2m1_codes(packed_values)`, `cuda_dequantize_nvfp4(quantized)`, and `cuda_w4a16_linear(x, weight)` from the same normally built `cuda_primitives.so`. RMSNorm accepts contiguous BF16 CUDA input of rank 1–4 and treats the final dimension as independent rows. RoPE accepts contiguous BF16 CUDA `[B,T,H,D]` input with positive dimensions and even `D >= 2`, applies the frozen adjacent-pair convention at absolute position `past_length + token_index`, and returns new BF16 storage. The NVFP4 operations use the repository's even-low/odd-high portable bytes and row-local 16-element UE4M3 scales. Direct W4A16 accepts contiguous BF16 CUDA activation storage and validated portable `NVFP4Tensor` weight storage and returns BF16 `x @ weight.T` output; it does not call the standalone dequantizer or allocate FP32 `[N,K]` weight storage.
+The Python loader is `cuda_primitives.py`. It exposes `cuda_rms_norm(x, weight, eps)`, `cuda_apply_rope(x, past_length, rope_theta=10000.0)`, `cuda_unpack_e2m1_codes(packed_values)`, `cuda_dequantize_nvfp4(quantized)`, `cuda_w4a16_linear(x, weight)`, and the separate experimental `cuda_w4a16_linear_grouped_decode(x, weight)` from the same normally built `cuda_primitives.so`. RMSNorm accepts contiguous BF16 CUDA input of rank 1–4 and treats the final dimension as independent rows. RoPE accepts contiguous BF16 CUDA `[B,T,H,D]` input with positive dimensions and even `D >= 2`, applies the frozen adjacent-pair convention at absolute position `past_length + token_index`, and returns new BF16 storage. The NVFP4 operations use the repository's even-low/odd-high portable bytes and row-local 16-element UE4M3 scales. Both direct W4A16 paths accept contiguous BF16 CUDA activation storage and validated portable `NVFP4Tensor` weight storage and return BF16 `x @ weight.T` output without calling the standalone dequantizer or allocating FP32 `[N,K]` weight storage.
 
 `NVFP4Tensor` construction owns canonical numerical-storage validation, including finite canonical UE4M3 bytes and the global scale value. The low-level CUDA operator checks device, dtype, rank, contiguity, shape, device agreement, and launch bounds without copying tensors or reading device values back to the host. Calling the raw operator therefore requires already validated canonical storage. The normal decode path performs no scale-byte scan or scalar `.item()` synchronization.
 

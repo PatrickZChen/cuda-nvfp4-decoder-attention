@@ -91,6 +91,35 @@ def cuda_w4a16_linear(
     )
 
 
+def cuda_w4a16_linear_grouped_decode(
+    x: torch.Tensor,
+    weight: NVFP4Tensor,
+) -> torch.Tensor:
+    """Run the isolated M4C grouped-decode W4A16 projection candidate.
+
+    The candidate consumes both nibbles of each packed byte and decodes one
+    UE4M3 scale per 16-weight subgroup without materializing FP32 weights.
+    """
+
+    if not isinstance(weight, NVFP4Tensor):
+        raise TypeError("weight must be an NVFP4Tensor")
+    derived_shape = (
+        weight.packed_values.shape[0],
+        weight.packed_values.shape[1] * 2,
+    )
+    if weight.logical_shape != derived_shape:
+        raise ValueError(
+            "weight.logical_shape must match packed_values-derived shape "
+            f"({weight.logical_shape} != {derived_shape})"
+        )
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_w4a16_linear_grouped_decode(
+        x,
+        weight.packed_values,
+        weight.block_scales,
+        weight.global_decode_scale,
+    )
+
+
 def cuda_rms_norm(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -121,4 +150,5 @@ __all__ = [
     "cuda_rms_norm",
     "cuda_unpack_e2m1_codes",
     "cuda_w4a16_linear",
+    "cuda_w4a16_linear_grouped_decode",
 ]

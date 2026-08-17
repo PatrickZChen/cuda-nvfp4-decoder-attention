@@ -48,6 +48,7 @@ add_library(
     src/rmsnorm.cu
     src/rope.cu
     src/w4a16.cu
+    src/w4a16_grouped.cu
 )
 
 target_include_directories(
