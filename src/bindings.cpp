@@ -1,4 +1,5 @@
 #include "gqa_attention.h"
+#include "kv_cache.h"
 #include "nvfp4.h"
 #include "rmsnorm.h"
 #include "rope.h"
@@ -69,6 +70,25 @@ std::int64_t checked_positive_product(
 }
 
 void validate_gqa_tensor(const char* name, const at::Tensor& tensor) {
+    TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
+    TORCH_CHECK(
+        tensor.scalar_type() == at::kBFloat16,
+        name,
+        " must have dtype torch.bfloat16");
+    TORCH_CHECK(tensor.is_contiguous(), name, " must be contiguous");
+    TORCH_CHECK(
+        tensor.dim() == 4,
+        name,
+        " must have rank 4, got rank ",
+        tensor.dim());
+    TORCH_CHECK(
+        tensor.size(0) > 0 && tensor.size(1) > 0 &&
+            tensor.size(2) > 0 && tensor.size(3) > 0,
+        name,
+        " dimensions must all be positive");
+}
+
+void validate_kv_cache_tensor(const char* name, const at::Tensor& tensor) {
     TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
     TORCH_CHECK(
         tensor.scalar_type() == at::kBFloat16,
@@ -629,6 +649,108 @@ at::Tensor cuda_gqa_attention(
     return context;
 }
 
+void cuda_kv_cache_append_(
+    at::Tensor& k_cache,
+    at::Tensor& v_cache,
+    const at::Tensor& new_k,
+    const at::Tensor& new_v,
+    std::int64_t past_length) {
+    validate_kv_cache_tensor("k_cache", k_cache);
+    validate_kv_cache_tensor("v_cache", v_cache);
+    validate_kv_cache_tensor("new_k", new_k);
+    validate_kv_cache_tensor("new_v", new_v);
+
+    TORCH_CHECK(
+        v_cache.sizes() == k_cache.sizes(),
+        "v_cache must have the same shape as k_cache; got ",
+        v_cache.sizes(),
+        " and ",
+        k_cache.sizes());
+    TORCH_CHECK(
+        new_v.sizes() == new_k.sizes(),
+        "new_v must have the same shape as new_k; got ",
+        new_v.sizes(),
+        " and ",
+        new_k.sizes());
+
+    TORCH_CHECK(
+        v_cache.device() == k_cache.device(),
+        "v_cache must be on the same CUDA device as k_cache");
+    TORCH_CHECK(
+        new_k.device() == k_cache.device(),
+        "new_k must be on the same CUDA device as k_cache");
+    TORCH_CHECK(
+        new_v.device() == k_cache.device(),
+        "new_v must be on the same CUDA device as k_cache");
+
+    // Physical caches are [B,Hkv,C,D]; current entries are [B,T,Hkv,D].
+    const std::int64_t batch_size = k_cache.size(0);
+    const std::int64_t kv_head_count = k_cache.size(1);
+    const std::int64_t cache_capacity = k_cache.size(2);
+    const std::int64_t head_dim = k_cache.size(3);
+    const std::int64_t new_batch_size = new_k.size(0);
+    const std::int64_t token_count = new_k.size(1);
+    const std::int64_t new_kv_head_count = new_k.size(2);
+    const std::int64_t new_head_dim = new_k.size(3);
+
+    TORCH_CHECK(
+        new_batch_size == batch_size,
+        "new K/V batch size must match cache batch size (",
+        new_batch_size,
+        " != ",
+        batch_size,
+        ")");
+    TORCH_CHECK(
+        new_kv_head_count == kv_head_count,
+        "new K/V head count must match cache KV head count (",
+        new_kv_head_count,
+        " != ",
+        kv_head_count,
+        ")");
+    TORCH_CHECK(
+        new_head_dim == head_dim,
+        "new K/V head dimension must match cache head dimension (",
+        new_head_dim,
+        " != ",
+        head_dim,
+        ")");
+
+    TORCH_CHECK(past_length >= 0, "past_length must be nonnegative");
+    TORCH_CHECK(
+        past_length <=
+            std::numeric_limits<std::int64_t>::max() - token_count,
+        "past_length + current token count overflows int64");
+    const std::int64_t present_length = past_length + token_count;
+    TORCH_CHECK(
+        present_length <= cache_capacity,
+        "past_length + current token count exceeds cache capacity (",
+        present_length,
+        " > ",
+        cache_capacity,
+        ")");
+
+    const std::int64_t element_count = checked_positive_product(
+        "B*T*Hkv*D",
+        {batch_size, token_count, kv_head_count, head_dim});
+    const std::int64_t grid_blocks =
+        (element_count - 1) / kKvCacheAppendBlockThreads + 1;
+    constexpr std::int64_t kMaximumOneDimensionalGrid =
+        std::numeric_limits<std::int32_t>::max();
+    TORCH_CHECK(
+        grid_blocks <= kMaximumOneDimensionalGrid,
+        "B*T*Hkv*D requires too many blocks for a one-dimensional CUDA grid");
+
+    const c10::cuda::CUDAGuard device_guard(k_cache.device());
+    launch_kv_cache_append_cuda(
+        k_cache,
+        v_cache,
+        new_k,
+        new_v,
+        past_length,
+        element_count,
+        grid_blocks);
+}
+
 }  // namespace cuda_nvfp4_decoder_attention
 
 TORCH_LIBRARY(cuda_nvfp4_decoder_attention, module) {
@@ -653,4 +775,7 @@ TORCH_LIBRARY(cuda_nvfp4_decoder_attention, module) {
     module.def(
         "cuda_gqa_attention(Tensor q, Tensor present_k, Tensor present_v, int past_length) -> Tensor",
         TORCH_FN(cuda_nvfp4_decoder_attention::cuda_gqa_attention));
+    module.def(
+        "cuda_kv_cache_append_(Tensor(a!) k_cache, Tensor(b!) v_cache, Tensor new_k, Tensor new_v, int past_length) -> ()",
+        TORCH_FN(cuda_nvfp4_decoder_attention::cuda_kv_cache_append_));
 }

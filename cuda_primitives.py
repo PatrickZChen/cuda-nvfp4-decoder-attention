@@ -162,10 +162,35 @@ def cuda_gqa_attention(
     )
 
 
+def cuda_kv_cache_append_(
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    new_k: torch.Tensor,
+    new_v: torch.Tensor,
+    past_length: int,
+) -> None:
+    """Append finalized token-major BF16 K/V into preallocated cache storage.
+
+    ``new_k`` is already post-K-RMSNorm/post-RoPE and ``new_v`` is projected V;
+    this mutating operation performs storage movement only.
+    """
+
+    if isinstance(past_length, bool) or not isinstance(past_length, int):
+        raise TypeError("past_length must be an integer")
+    torch.ops.cuda_nvfp4_decoder_attention.cuda_kv_cache_append_(
+        k_cache,
+        v_cache,
+        new_k,
+        new_v,
+        past_length,
+    )
+
+
 __all__ = [
     "cuda_apply_rope",
     "cuda_dequantize_nvfp4",
     "cuda_gqa_attention",
+    "cuda_kv_cache_append_",
     "cuda_rms_norm",
     "cuda_unpack_e2m1_codes",
     "cuda_w4a16_linear",
