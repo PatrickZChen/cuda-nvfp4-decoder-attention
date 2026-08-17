@@ -144,9 +144,28 @@ def cuda_apply_rope(
     )
 
 
+def cuda_gqa_attention(
+    q: torch.Tensor,
+    present_k: torch.Tensor,
+    present_v: torch.Tensor,
+    past_length: int,
+) -> torch.Tensor:
+    """Run materialized three-stage causal GQA and return BF16 context heads."""
+
+    if isinstance(past_length, bool) or not isinstance(past_length, int):
+        raise TypeError("past_length must be an integer")
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_gqa_attention(
+        q,
+        present_k,
+        present_v,
+        past_length,
+    )
+
+
 __all__ = [
     "cuda_apply_rope",
     "cuda_dequantize_nvfp4",
+    "cuda_gqa_attention",
     "cuda_rms_norm",
     "cuda_unpack_e2m1_codes",
     "cuda_w4a16_linear",

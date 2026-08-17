@@ -44,6 +44,7 @@ add_library(
     cuda_primitives
     SHARED
     src/bindings.cpp
+    src/gqa_attention.cu
     src/nvfp4.cu
     src/rmsnorm.cu
     src/rope.cu
