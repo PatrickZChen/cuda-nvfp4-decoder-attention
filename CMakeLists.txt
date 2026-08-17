@@ -47,6 +47,7 @@ add_library(
     src/nvfp4.cu
     src/rmsnorm.cu
     src/rope.cu
+    src/w4a16.cu
 )
 
 target_include_directories(

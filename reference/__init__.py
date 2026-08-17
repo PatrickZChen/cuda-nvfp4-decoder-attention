@@ -29,6 +29,7 @@ from .nvfp4 import (
     quantize_nvfp4_reference,
     unpack_e2m1_codes,
 )
+from .w4a16 import w4a16_linear_reference
 
 __all__ = [
     "DecoderAttentionConfig",
@@ -56,4 +57,5 @@ __all__ = [
     "reshape_heads_reference",
     "rms_norm_reference",
     "unpack_e2m1_codes",
+    "w4a16_linear_reference",
 ]

@@ -1,6 +1,6 @@
 # CUDA NVFP4 Decoder Attention
 
-This repository is independently designed and implemented as a clean-room CUDA performance-engineering study of a transformer decoder-attention block. Its primary development target is the NVIDIA GeForce RTX 4080 Laptop GPU (Ada, SM89). Ada does not provide native NVFP4 Tensor Core matrix execution, so the planned low-precision path uses packed NVFP4 projection weights with software unpack/dequantization, BF16 activations, FP32 accumulation, and BF16 outputs (`nvfp4_w4a16`). Grouped-query attention (GQA), adjacent-pair RoPE, BF16 KV caching, causal attention, numerical analysis, profiler-driven optimization, and selective fusion are in scope. The repository now contains the BF16/FP32 decoder-attention reference, a portable NVFP4 numerical reference, and validated modular CUDA primitives for RMSNorm, adjacent-pair RoPE, and portable NVFP4 unpack/dequantization. These kernels have run on the RTX 4080 target and passed Compute Sanitizer memcheck with zero errors. No performance claims have been published.
+This repository is independently designed and implemented as a clean-room CUDA performance-engineering study of a transformer decoder-attention block. Its primary development target is the NVIDIA GeForce RTX 4080 Laptop GPU (Ada, SM89). Ada does not provide native NVFP4 Tensor Core matrix execution, so the planned low-precision path uses packed NVFP4 projection weights with software unpack/dequantization, BF16 activations, FP32 accumulation, and BF16 outputs (`nvfp4_w4a16`). Grouped-query attention (GQA), adjacent-pair RoPE, BF16 KV caching, causal attention, numerical analysis, profiler-driven optimization, and selective fusion are in scope. The repository now contains the BF16/FP32 decoder-attention reference, a portable NVFP4 numerical reference, validated modular CUDA primitives for RMSNorm, adjacent-pair RoPE, and portable NVFP4 unpack/dequantization, and a direct software-decoded W4A16 projection baseline. The direct projection consumes portable packed NVFP4 weights without materializing a complete FP32 weight matrix, decodes weights in-kernel, multiplies BF16 activations in FP32, accumulates FP32, and stores BF16 output. These kernels have run on the RTX 4080 target and passed Compute Sanitizer memcheck with zero errors. This is not native FP4 Tensor Core execution or an optimized GEMM, and no performance numbers or claims have been published.
 
 ## Semantic pipeline
 
@@ -38,7 +38,7 @@ The canonical configuration is `H = 3072`, `Hq = 24`, `Hkv = 6`, and `D = 128`, 
 
 NVFP4 names a numerical and packed-weight representation in this project; it does not mean that attention or matrix execution is natively FP4 on Ada. A native Blackwell FP4 backend is optional future work and may require a separate physical layout.
 
-Milestone 1 provides the BF16/FP32 PyTorch correctness reference, Milestone 2B provides the portable NVFP4 numerical reference, Milestone 3A adds baseline CUDA RMSNorm, Milestone 3B adds standalone adjacent-pair CUDA RoPE, and Milestone 3C adds portable E2M1 unpack and NVFP4 software dequantization. The Ada M3C path materializes FP32 reconstructed weights for correctness validation; it is not native FP4 Tensor Core execution, an optimized kernel, or a W4A16 GEMM. The modular CUDA primitives compose into the Q/K RMSNorm-then-RoPE path. See [the architecture specification](docs/ARCHITECTURE.md) and [the numerical contract](docs/NUMERICS.md) for the complete semantic and numerical contracts, validation philosophy, limitations, and roadmap.
+Milestone 1 provides the BF16/FP32 PyTorch correctness reference, Milestone 2B provides the portable NVFP4 numerical reference, Milestones 3A–3C add CUDA RMSNorm, adjacent-pair RoPE, and portable E2M1 unpack/NVFP4 software dequantization, and Milestone 4A adds the direct correctness-first W4A16 projection baseline. The modular CUDA primitives compose into the Q/K RMSNorm-then-RoPE path. See [the architecture specification](docs/ARCHITECTURE.md) and [the numerical contract](docs/NUMERICS.md) for the complete semantic and numerical contracts, validation philosophy, limitations, and roadmap.
 
 ## CUDA primitives build and validation
 
@@ -52,21 +52,24 @@ python -m pytest -q
 python -m pytest -q tests/test_cuda_rmsnorm.py
 python -m pytest -q tests/test_cuda_rope.py
 python -m pytest -q tests/test_cuda_nvfp4.py
+python -m pytest -q tests/test_cuda_w4a16.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_rmsnorm.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_rope.py
 compute-sanitizer --tool memcheck --error-exitcode 99 \
     .venv/bin/python scripts/validate_cuda_nvfp4.py
+compute-sanitizer --tool memcheck --error-exitcode 99 \
+    .venv/bin/python scripts/validate_cuda_w4a16.py
 ```
 
 The script performs a normal out-of-tree `Release` build in `build-cuda` and targets SM89 only. Configuration reports that installed PyTorch was built with CUDA 12.4 while the extension uses Toolkit 12.5; this minor-version difference is retained and validated rather than changing either installation.
 
-The Python loader is `cuda_primitives.py`. It exposes `cuda_rms_norm(x, weight, eps)`, `cuda_apply_rope(x, past_length, rope_theta=10000.0)`, `cuda_unpack_e2m1_codes(packed_values)`, and `cuda_dequantize_nvfp4(quantized)`, all from the same normally built `cuda_primitives.so`. RMSNorm accepts contiguous BF16 CUDA input of rank 1–4 and treats the final dimension as independent rows. RoPE accepts contiguous BF16 CUDA `[B,T,H,D]` input with positive dimensions and even `D >= 2`, applies the frozen adjacent-pair convention at absolute position `past_length + token_index`, and returns new BF16 storage. The NVFP4 operations use the repository's even-low/odd-high portable bytes and row-local 16-element UE4M3 scales; unpack returns logical `uint8` codes and dequantization returns FP32 `[N,K]` reconstructed weights through exact software decode on Ada.
+The Python loader is `cuda_primitives.py`. It exposes `cuda_rms_norm(x, weight, eps)`, `cuda_apply_rope(x, past_length, rope_theta=10000.0)`, `cuda_unpack_e2m1_codes(packed_values)`, `cuda_dequantize_nvfp4(quantized)`, and `cuda_w4a16_linear(x, weight)` from the same normally built `cuda_primitives.so`. RMSNorm accepts contiguous BF16 CUDA input of rank 1–4 and treats the final dimension as independent rows. RoPE accepts contiguous BF16 CUDA `[B,T,H,D]` input with positive dimensions and even `D >= 2`, applies the frozen adjacent-pair convention at absolute position `past_length + token_index`, and returns new BF16 storage. The NVFP4 operations use the repository's even-low/odd-high portable bytes and row-local 16-element UE4M3 scales. Direct W4A16 accepts contiguous BF16 CUDA activation storage and validated portable `NVFP4Tensor` weight storage and returns BF16 `x @ weight.T` output; it does not call the standalone dequantizer or allocate FP32 `[N,K]` weight storage.
 
 `NVFP4Tensor` construction owns canonical numerical-storage validation, including finite canonical UE4M3 bytes and the global scale value. The low-level CUDA operator checks device, dtype, rank, contiguity, shape, device agreement, and launch bounds without copying tensors or reading device values back to the host. Calling the raw operator therefore requires already validated canonical storage. The normal decode path performs no scale-byte scan or scalar `.item()` synchronization.
 
-RMSNorm, RoPE, and the portable NVFP4 unpack/dequantization kernels have run on the RTX 4080 SM89 target and passed Compute Sanitizer memcheck with zero errors. M3C makes no GEMM, projection, attention, optimization, or performance claim.
+RMSNorm, RoPE, portable NVFP4 unpack/dequantization, and direct W4A16 projection have run on the RTX 4080 SM89 target and passed Compute Sanitizer memcheck with zero errors. M4A makes no native FP4, optimized GEMM, attention, fusion, or performance claim.
 
 ## License
 

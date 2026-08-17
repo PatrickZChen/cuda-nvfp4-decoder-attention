@@ -62,6 +62,35 @@ def cuda_dequantize_nvfp4(quantized: NVFP4Tensor) -> torch.Tensor:
     )
 
 
+def cuda_w4a16_linear(
+    x: torch.Tensor,
+    weight: NVFP4Tensor,
+) -> torch.Tensor:
+    """Project BF16 activations with directly consumed portable NVFP4 weights.
+
+    Weight nibbles and row-local block-scale bytes are decoded inside the CUDA
+    projection kernel. This wrapper does not materialize an FP32 weight matrix.
+    """
+
+    if not isinstance(weight, NVFP4Tensor):
+        raise TypeError("weight must be an NVFP4Tensor")
+    derived_shape = (
+        weight.packed_values.shape[0],
+        weight.packed_values.shape[1] * 2,
+    )
+    if weight.logical_shape != derived_shape:
+        raise ValueError(
+            "weight.logical_shape must match packed_values-derived shape "
+            f"({weight.logical_shape} != {derived_shape})"
+        )
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_w4a16_linear(
+        x,
+        weight.packed_values,
+        weight.block_scales,
+        weight.global_decode_scale,
+    )
+
+
 def cuda_rms_norm(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -91,4 +120,5 @@ __all__ = [
     "cuda_dequantize_nvfp4",
     "cuda_rms_norm",
     "cuda_unpack_e2m1_codes",
+    "cuda_w4a16_linear",
 ]

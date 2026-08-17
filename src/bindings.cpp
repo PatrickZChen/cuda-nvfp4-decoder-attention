@@ -1,6 +1,7 @@
 #include "nvfp4.h"
 #include "rmsnorm.h"
 #include "rope.h"
+#include "w4a16.h"
 
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_like.h>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace cuda_nvfp4_decoder_attention {
 
@@ -137,6 +139,125 @@ at::Tensor cuda_dequantize_nvfp4(
     return output;
 }
 
+at::Tensor cuda_w4a16_linear(
+    const at::Tensor& x,
+    const at::Tensor& packed_values,
+    const at::Tensor& block_scales,
+    const at::Tensor& global_decode_scale) {
+    TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
+    TORCH_CHECK(
+        x.scalar_type() == at::kBFloat16,
+        "x must have dtype torch.bfloat16");
+    TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
+    TORCH_CHECK(
+        x.dim() >= 1 && x.dim() <= 4,
+        "x must have rank in [1, 4], got rank ",
+        x.dim());
+    TORCH_CHECK(x.numel() > 0, "x must be nonempty");
+
+    validate_packed_values(packed_values);
+    TORCH_CHECK(
+        block_scales.is_cuda(),
+        "block_scales must be a CUDA tensor");
+    TORCH_CHECK(
+        block_scales.scalar_type() == at::kByte,
+        "block_scales must have dtype torch.uint8");
+    TORCH_CHECK(
+        block_scales.is_contiguous(),
+        "block_scales must be contiguous");
+    TORCH_CHECK(
+        block_scales.dim() == 2,
+        "block_scales must have rank 2, got rank ",
+        block_scales.dim());
+
+    TORCH_CHECK(
+        global_decode_scale.is_cuda(),
+        "global_decode_scale must be a CUDA tensor");
+    TORCH_CHECK(
+        global_decode_scale.scalar_type() == at::kFloat,
+        "global_decode_scale must have dtype torch.float32");
+    TORCH_CHECK(
+        global_decode_scale.is_contiguous(),
+        "global_decode_scale must be contiguous");
+    TORCH_CHECK(
+        global_decode_scale.dim() == 0,
+        "global_decode_scale must be a scalar tensor with shape []");
+
+    TORCH_CHECK(
+        packed_values.device() == x.device(),
+        "packed_values must be on the same CUDA device as x");
+    TORCH_CHECK(
+        block_scales.device() == x.device(),
+        "block_scales must be on the same CUDA device as x");
+    TORCH_CHECK(
+        global_decode_scale.device() == x.device(),
+        "global_decode_scale must be on the same CUDA device as x");
+
+    const std::int64_t output_features = packed_values.size(0);
+    const std::int64_t reduction_size = packed_values.size(1) * 2;
+    TORCH_CHECK(
+        reduction_size >= 16,
+        "logical K must be at least 16, got ",
+        reduction_size);
+    TORCH_CHECK(
+        reduction_size % 16 == 0,
+        "logical K must be divisible by 16, got ",
+        reduction_size);
+    TORCH_CHECK(
+        x.size(-1) == reduction_size,
+        "x final dimension must match logical weight K (",
+        x.size(-1),
+        " != ",
+        reduction_size,
+        ")");
+    TORCH_CHECK(
+        block_scales.size(0) == output_features,
+        "block_scales row count must match packed_values (",
+        block_scales.size(0),
+        " != ",
+        output_features,
+        ")");
+    TORCH_CHECK(
+        block_scales.size(1) == reduction_size / 16,
+        "block_scales must have shape [N, K/16]; expected [",
+        output_features,
+        ", ",
+        reduction_size / 16,
+        "], got [",
+        block_scales.size(0),
+        ", ",
+        block_scales.size(1),
+        "]");
+
+    TORCH_CHECK(
+        x.numel() % reduction_size == 0,
+        "x element count must be divisible by logical weight K");
+    const std::int64_t activation_rows = x.numel() / reduction_size;
+    TORCH_CHECK(
+        activation_rows <=
+            std::numeric_limits<std::int64_t>::max() / output_features,
+        "M*N overflows int64");
+    const std::int64_t output_count = activation_rows * output_features;
+    TORCH_CHECK(
+        output_count <= std::numeric_limits<std::int32_t>::max(),
+        "M*N is too large for a one-dimensional CUDA grid");
+
+    std::vector<std::int64_t> output_sizes(
+        x.sizes().begin(),
+        x.sizes().end());
+    output_sizes.back() = output_features;
+
+    const c10::cuda::CUDAGuard device_guard(x.device());
+    at::Tensor output = at::empty(output_sizes, x.options());
+    launch_w4a16_linear_cuda(
+        x,
+        packed_values,
+        block_scales,
+        global_decode_scale,
+        output);
+    return output;
+}
+
 at::Tensor cuda_rms_norm(
     const at::Tensor& x,
     const at::Tensor& weight,
@@ -248,4 +369,7 @@ TORCH_LIBRARY(cuda_nvfp4_decoder_attention, module) {
     module.def(
         "cuda_apply_rope(Tensor x, int past_length, float rope_theta=10000.0) -> Tensor",
         TORCH_FN(cuda_nvfp4_decoder_attention::cuda_apply_rope));
+    module.def(
+        "cuda_w4a16_linear(Tensor x, Tensor packed_values, Tensor block_scales, Tensor global_decode_scale) -> Tensor",
+        TORCH_FN(cuda_nvfp4_decoder_attention::cuda_w4a16_linear));
 }
