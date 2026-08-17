@@ -7,6 +7,8 @@ from pathlib import Path
 
 import torch
 
+from reference.nvfp4 import NVFP4Tensor
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parent
 _LIBRARY_PATH = Path(
@@ -23,6 +25,41 @@ if not _LIBRARY_PATH.is_file():
     )
 
 torch.ops.load_library(str(_LIBRARY_PATH))
+
+
+def cuda_unpack_e2m1_codes(packed_values: torch.Tensor) -> torch.Tensor:
+    """Unpack portable even-low, odd-high E2M1 bytes on the current stream."""
+
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_unpack_e2m1_codes(
+        packed_values
+    )
+
+
+def cuda_dequantize_nvfp4(quantized: NVFP4Tensor) -> torch.Tensor:
+    """Software-decode validated portable NVFP4 storage into CUDA FP32.
+
+    ``NVFP4Tensor`` construction owns canonical byte/value validation. This hot
+    path deliberately performs only host-visible metadata checks here and
+    structural tensor checks in C++; it does not rescan device scale contents.
+    Mutating a validated object's numerical storage afterward is unsupported.
+    """
+
+    if not isinstance(quantized, NVFP4Tensor):
+        raise TypeError("quantized must be an NVFP4Tensor")
+    derived_shape = (
+        quantized.packed_values.shape[0],
+        quantized.packed_values.shape[1] * 2,
+    )
+    if quantized.logical_shape != derived_shape:
+        raise ValueError(
+            "quantized.logical_shape must match packed_values-derived shape "
+            f"({quantized.logical_shape} != {derived_shape})"
+        )
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_dequantize_nvfp4(
+        quantized.packed_values,
+        quantized.block_scales,
+        quantized.global_decode_scale,
+    )
 
 
 def cuda_rms_norm(
@@ -49,4 +86,9 @@ def cuda_apply_rope(
     )
 
 
-__all__ = ["cuda_apply_rope", "cuda_rms_norm"]
+__all__ = [
+    "cuda_apply_rope",
+    "cuda_dequantize_nvfp4",
+    "cuda_rms_norm",
+    "cuda_unpack_e2m1_codes",
+]

@@ -1,6 +1,8 @@
+#include "nvfp4.h"
 #include "rmsnorm.h"
 #include "rope.h"
 
+#include <ATen/ops/empty.h>
 #include <ATen/ops/empty_like.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/library.h>
@@ -10,6 +12,130 @@
 #include <limits>
 
 namespace cuda_nvfp4_decoder_attention {
+
+namespace {
+
+void validate_packed_values(const at::Tensor& packed_values) {
+    TORCH_CHECK(
+        packed_values.is_cuda(),
+        "packed_values must be a CUDA tensor");
+    TORCH_CHECK(
+        packed_values.scalar_type() == at::kByte,
+        "packed_values must have dtype torch.uint8");
+    TORCH_CHECK(
+        packed_values.is_contiguous(),
+        "packed_values must be contiguous");
+    TORCH_CHECK(
+        packed_values.dim() == 2,
+        "packed_values must have rank 2, got rank ",
+        packed_values.dim());
+    TORCH_CHECK(
+        packed_values.size(0) > 0 && packed_values.size(1) > 0,
+        "packed_values must have nonempty N and packed-byte dimensions");
+    TORCH_CHECK(
+        packed_values.size(1) <=
+            std::numeric_limits<std::int64_t>::max() / 2,
+        "packed_values byte dimension is too large to derive logical K");
+    TORCH_CHECK(
+        packed_values.numel() <=
+            std::numeric_limits<std::int64_t>::max() / 2,
+        "packed_values has too many bytes to allocate the unpacked output");
+
+    const std::int64_t grid_blocks =
+        (packed_values.numel() - 1) / kNvfp4BlockThreads + 1;
+    TORCH_CHECK(
+        grid_blocks <= std::numeric_limits<std::int32_t>::max(),
+        "packed_values is too large for a one-dimensional CUDA grid");
+}
+
+}  // namespace
+
+at::Tensor cuda_unpack_e2m1_codes(const at::Tensor& packed_values) {
+    validate_packed_values(packed_values);
+
+    const c10::cuda::CUDAGuard device_guard(packed_values.device());
+    at::Tensor output = at::empty(
+        {packed_values.size(0), packed_values.size(1) * 2},
+        packed_values.options());
+    launch_unpack_e2m1_codes_cuda(packed_values, output);
+    return output;
+}
+
+at::Tensor cuda_dequantize_nvfp4(
+    const at::Tensor& packed_values,
+    const at::Tensor& block_scales,
+    const at::Tensor& global_decode_scale) {
+    validate_packed_values(packed_values);
+    TORCH_CHECK(
+        block_scales.is_cuda(),
+        "block_scales must be a CUDA tensor");
+    TORCH_CHECK(
+        block_scales.scalar_type() == at::kByte,
+        "block_scales must have dtype torch.uint8");
+    TORCH_CHECK(
+        block_scales.is_contiguous(),
+        "block_scales must be contiguous");
+    TORCH_CHECK(
+        block_scales.dim() == 2,
+        "block_scales must have rank 2, got rank ",
+        block_scales.dim());
+    TORCH_CHECK(
+        block_scales.device() == packed_values.device(),
+        "block_scales must be on the same CUDA device as packed_values");
+
+    TORCH_CHECK(
+        global_decode_scale.is_cuda(),
+        "global_decode_scale must be a CUDA tensor");
+    TORCH_CHECK(
+        global_decode_scale.scalar_type() == at::kFloat,
+        "global_decode_scale must have dtype torch.float32");
+    TORCH_CHECK(
+        global_decode_scale.is_contiguous(),
+        "global_decode_scale must be contiguous");
+    TORCH_CHECK(
+        global_decode_scale.dim() == 0,
+        "global_decode_scale must be a scalar tensor with shape []");
+    TORCH_CHECK(
+        global_decode_scale.device() == packed_values.device(),
+        "global_decode_scale must be on the same CUDA device as packed_values");
+
+    const std::int64_t rows = packed_values.size(0);
+    const std::int64_t columns = packed_values.size(1) * 2;
+    TORCH_CHECK(columns >= 16, "logical K must be at least 16, got ", columns);
+    TORCH_CHECK(
+        columns % 16 == 0,
+        "logical K must be divisible by 16, got ",
+        columns);
+    TORCH_CHECK(
+        block_scales.size(0) == rows,
+        "block_scales row count must match packed_values (",
+        block_scales.size(0),
+        " != ",
+        rows,
+        ")");
+    TORCH_CHECK(
+        block_scales.size(1) == columns / 16,
+        "block_scales must have shape [N, K/16]; expected [",
+        rows,
+        ", ",
+        columns / 16,
+        "], got [",
+        block_scales.size(0),
+        ", ",
+        block_scales.size(1),
+        "]");
+
+    const c10::cuda::CUDAGuard device_guard(packed_values.device());
+    at::Tensor output = at::empty(
+        {rows, columns},
+        packed_values.options().dtype(at::kFloat));
+    launch_dequantize_nvfp4_cuda(
+        packed_values,
+        block_scales,
+        global_decode_scale,
+        output);
+    return output;
+}
 
 at::Tensor cuda_rms_norm(
     const at::Tensor& x,
@@ -110,6 +236,12 @@ at::Tensor cuda_apply_rope(
 }  // namespace cuda_nvfp4_decoder_attention
 
 TORCH_LIBRARY(cuda_nvfp4_decoder_attention, module) {
+    module.def(
+        "cuda_unpack_e2m1_codes(Tensor packed_values) -> Tensor",
+        TORCH_FN(cuda_nvfp4_decoder_attention::cuda_unpack_e2m1_codes));
+    module.def(
+        "cuda_dequantize_nvfp4(Tensor packed_values, Tensor block_scales, Tensor global_decode_scale) -> Tensor",
+        TORCH_FN(cuda_nvfp4_decoder_attention::cuda_dequantize_nvfp4));
     module.def(
         "cuda_rms_norm(Tensor x, Tensor weight, float eps) -> Tensor",
         TORCH_FN(cuda_nvfp4_decoder_attention::cuda_rms_norm));
