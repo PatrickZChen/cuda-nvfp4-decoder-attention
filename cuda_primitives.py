@@ -162,6 +162,29 @@ def cuda_gqa_attention(
     )
 
 
+def cuda_gqa_attention_cached(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    past_length: int,
+) -> torch.Tensor:
+    """Run causal GQA directly over physical ``[B,Hkv,C,D]`` caches.
+
+    The logical attention length is derived as ``past_length + q.size(1)``;
+    physical cache capacity remains the batch/head stride in both QK and PV.
+    The caches are read-only and no compact logical prefix is materialized.
+    """
+
+    if isinstance(past_length, bool) or not isinstance(past_length, int):
+        raise TypeError("past_length must be an integer")
+    return torch.ops.cuda_nvfp4_decoder_attention.cuda_gqa_attention_cached(
+        q,
+        k_cache,
+        v_cache,
+        past_length,
+    )
+
+
 def cuda_kv_cache_append_(
     k_cache: torch.Tensor,
     v_cache: torch.Tensor,
@@ -190,6 +213,7 @@ __all__ = [
     "cuda_apply_rope",
     "cuda_dequantize_nvfp4",
     "cuda_gqa_attention",
+    "cuda_gqa_attention_cached",
     "cuda_kv_cache_append_",
     "cuda_rms_norm",
     "cuda_unpack_e2m1_codes",

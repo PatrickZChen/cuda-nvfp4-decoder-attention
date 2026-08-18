@@ -11,6 +11,11 @@ from .decoder_attention import (
     reshape_heads_reference,
     rms_norm_reference,
 )
+from .decoder_attention_nvfp4 import (
+    NVFP4DecoderAttentionDebug,
+    NVFP4DecoderAttentionResult,
+    decoder_attention_nvfp4_reference,
+)
 from .nvfp4 import (
     E2M1_MAX,
     NVFP4_BLOCK_SIZE,
@@ -40,6 +45,8 @@ __all__ = [
     "NVFP4_GLOBAL_RANGE",
     "NVFP4ErrorMetrics",
     "NVFP4Tensor",
+    "NVFP4DecoderAttentionDebug",
+    "NVFP4DecoderAttentionResult",
     "UE4M3_MAX",
     "analyze_nvfp4_error",
     "apply_rope_reference",
@@ -47,6 +54,7 @@ __all__ = [
     "decode_e2m1",
     "decode_ue4m3",
     "decoder_attention_reference",
+    "decoder_attention_nvfp4_reference",
     "dequantize_nvfp4_reference",
     "encode_e2m1",
     "encode_ue4m3",

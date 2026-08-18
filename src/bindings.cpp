@@ -1,4 +1,5 @@
 #include "gqa_attention.h"
+#include "gqa_attention_cached.h"
 #include "kv_cache.h"
 #include "nvfp4.h"
 #include "rmsnorm.h"
@@ -649,6 +650,137 @@ at::Tensor cuda_gqa_attention(
     return context;
 }
 
+at::Tensor cuda_gqa_attention_cached(
+    const at::Tensor& q,
+    const at::Tensor& k_cache,
+    const at::Tensor& v_cache,
+    std::int64_t past_length) {
+    validate_gqa_tensor("q", q);
+    validate_gqa_tensor("k_cache", k_cache);
+    validate_gqa_tensor("v_cache", v_cache);
+
+    TORCH_CHECK(
+        v_cache.sizes() == k_cache.sizes(),
+        "v_cache must have the same shape as k_cache; got ",
+        v_cache.sizes(),
+        " and ",
+        k_cache.sizes());
+    TORCH_CHECK(
+        k_cache.device() == q.device(),
+        "k_cache must be on the same CUDA device as q");
+    TORCH_CHECK(
+        v_cache.device() == q.device(),
+        "v_cache must be on the same CUDA device as q");
+
+    const std::int64_t batch_size = q.size(0);
+    const std::int64_t token_count = q.size(1);
+    const std::int64_t query_head_count = q.size(2);
+    const std::int64_t head_dim = q.size(3);
+    const std::int64_t cache_batch_size = k_cache.size(0);
+    const std::int64_t kv_head_count = k_cache.size(1);
+    const std::int64_t cache_capacity = k_cache.size(2);
+    const std::int64_t cache_head_dim = k_cache.size(3);
+
+    TORCH_CHECK(
+        batch_size == cache_batch_size,
+        "q and cache batch sizes must match (",
+        batch_size,
+        " != ",
+        cache_batch_size,
+        ")");
+    TORCH_CHECK(
+        head_dim == cache_head_dim,
+        "q and cache head dimensions must match (",
+        head_dim,
+        " != ",
+        cache_head_dim,
+        ")");
+    TORCH_CHECK(
+        query_head_count % kv_head_count == 0,
+        "number of query heads must be divisible by number of KV heads (",
+        query_head_count,
+        " % ",
+        kv_head_count,
+        " != 0)");
+    TORCH_CHECK(past_length >= 0, "past_length must be nonnegative");
+    TORCH_CHECK(
+        past_length <=
+            std::numeric_limits<std::int64_t>::max() - token_count,
+        "past_length + current token count overflows int64");
+    const std::int64_t logical_context_length = past_length + token_count;
+    TORCH_CHECK(
+        logical_context_length <= cache_capacity,
+        "past_length + current token count exceeds cache capacity (",
+        logical_context_length,
+        " > ",
+        cache_capacity,
+        ")");
+
+    const std::int64_t softmax_rows = checked_positive_product(
+        "B*Hq*T",
+        {batch_size, query_head_count, token_count});
+    const std::int64_t score_count = checked_positive_product(
+        "B*Hq*T*S",
+        {
+            batch_size,
+            query_head_count,
+            token_count,
+            logical_context_length,
+        });
+    const std::int64_t context_count = checked_positive_product(
+        "B*T*Hq*D",
+        {batch_size, token_count, query_head_count, head_dim});
+    constexpr std::int64_t kMaximumOneDimensionalGrid =
+        std::numeric_limits<std::int32_t>::max();
+    TORCH_CHECK(
+        score_count <= kMaximumOneDimensionalGrid,
+        "B*Hq*T*S is too large for a one-dimensional CUDA grid");
+    TORCH_CHECK(
+        softmax_rows <= kMaximumOneDimensionalGrid,
+        "B*Hq*T is too large for a one-dimensional CUDA grid");
+    TORCH_CHECK(
+        context_count <= kMaximumOneDimensionalGrid,
+        "B*T*Hq*D is too large for a one-dimensional CUDA grid");
+
+    const float inverse_sqrt_head_dim = static_cast<float>(
+        1.0 / std::sqrt(static_cast<double>(head_dim)));
+    TORCH_CHECK(
+        std::isfinite(inverse_sqrt_head_dim) &&
+            inverse_sqrt_head_dim > 0.0F,
+        "1/sqrt(D) must be representable as a finite positive FP32 value");
+
+    const c10::cuda::CUDAGuard device_guard(q.device());
+    at::Tensor scores = at::empty(
+        {
+            batch_size,
+            query_head_count,
+            token_count,
+            logical_context_length,
+        },
+        q.options().dtype(at::kFloat));
+    at::Tensor probabilities = at::empty(
+        {
+            batch_size,
+            query_head_count,
+            token_count,
+            logical_context_length,
+        },
+        q.options().dtype(at::kFloat));
+    at::Tensor context = at::empty(
+        {batch_size, token_count, query_head_count, head_dim},
+        q.options());
+    launch_gqa_attention_cached_cuda(
+        q,
+        k_cache,
+        v_cache,
+        scores,
+        probabilities,
+        context,
+        past_length,
+        inverse_sqrt_head_dim);
+    return context;
+}
+
 void cuda_kv_cache_append_(
     at::Tensor& k_cache,
     at::Tensor& v_cache,
@@ -775,6 +907,9 @@ TORCH_LIBRARY(cuda_nvfp4_decoder_attention, module) {
     module.def(
         "cuda_gqa_attention(Tensor q, Tensor present_k, Tensor present_v, int past_length) -> Tensor",
         TORCH_FN(cuda_nvfp4_decoder_attention::cuda_gqa_attention));
+    module.def(
+        "cuda_gqa_attention_cached(Tensor q, Tensor k_cache, Tensor v_cache, int past_length) -> Tensor",
+        TORCH_FN(cuda_nvfp4_decoder_attention::cuda_gqa_attention_cached));
     module.def(
         "cuda_kv_cache_append_(Tensor(a!) k_cache, Tensor(b!) v_cache, Tensor new_k, Tensor new_v, int past_length) -> ()",
         TORCH_FN(cuda_nvfp4_decoder_attention::cuda_kv_cache_append_));

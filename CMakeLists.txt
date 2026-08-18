@@ -45,6 +45,7 @@ add_library(
     SHARED
     src/bindings.cpp
     src/gqa_attention.cu
+    src/gqa_attention_cached.cu
     src/kv_cache.cu
     src/nvfp4.cu
     src/rmsnorm.cu
